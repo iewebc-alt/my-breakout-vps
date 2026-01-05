@@ -1,5 +1,5 @@
-// --- 1. НАСТРОЙКИ ---
-let paddleBottomMargin = 45; // let, чтобы можно было менять в resize
+// --- 1. КОНСТАНТЫ ---
+let paddleBottomMargin = 45;
 const maxAutoplaySpeed = 26;
 const ballRadius = 8;
 const brickWidth = 60;   
@@ -36,58 +36,70 @@ const patterns = [
     [[0,1,1,1,1,1,0],[1,0,0,0,0,0,1],[1,0,1,0,1,0,1],[1,0,0,0,0,0,1],[1,0,1,1,1,0,1],[0,1,1,1,1,1,0]]
 ];
 
-// --- 4. ЗВУК (SAFE MODE) ---
+// --- 4. WAKE LOCK (БЛОКИРОВКА СНА) ---
+let wakeLock = null;
+async function requestWakeLock() {
+    try {
+        if ('wakeLock' in navigator) {
+            wakeLock = await navigator.wakeLock.request('screen');
+            wakeLock.addEventListener('release', () => {
+                // Если блокировка слетела, пробуем вернуть через секунду
+                setTimeout(requestWakeLock, 1000);
+            });
+        }
+    } catch (err) {}
+}
+// Периодическая проверка статуса (страховка)
+setInterval(() => {
+    if (gameStarted && !isGameOver && document.visibilityState === 'visible') requestWakeLock();
+}, 15000);
+
+
+// --- 5. ЗВУКОВОЙ ДВИЖОК ---
 let audioCtx = null, noiseBuffer = null;
 
 function initAudio() {
-    if (audioCtx) {
-        if (audioCtx.state === 'suspended') audioCtx.resume();
-        return;
-    }
+    if (audioCtx && audioCtx.state === 'running') return;
     try {
         const AudioContext = window.AudioContext || window.webkitAudioContext;
-        if (!AudioContext) return;
-        audioCtx = new AudioContext();
+        if (!audioCtx) audioCtx = new AudioContext();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
         
-        try {
+        if (!noiseBuffer) {
             const size = audioCtx.sampleRate * 0.1;
             noiseBuffer = audioCtx.createBuffer(1, size, audioCtx.sampleRate);
             const data = noiseBuffer.getChannelData(0);
             for (let i = 0; i < size; i++) data[i] = Math.random() * 2 - 1;
-        } catch(e) { }
-
-        const osc = audioCtx.createOscillator();
-        const g = audioCtx.createGain();
-        g.gain.value = 0.001;
-        osc.connect(g); g.connect(audioCtx.destination);
-        osc.start(); osc.stop(audioCtx.currentTime + 0.01);
+        }
+        const buffer = audioCtx.createBuffer(1, 1, 22050);
+        const source = audioCtx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(audioCtx.destination);
+        source.start(0);
     } catch(e) {}
 }
 
 function playNaturalSound(type) {
     if (!audioCtx || !noiseBuffer) return;
-    try {
-        if (audioCtx.state === 'suspended') audioCtx.resume();
-        const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
-        const noise = audioCtx.createBufferSource(), nGain = audioCtx.createGain();
-        noise.buffer = noiseBuffer;
-
-        switch(type) {
-            case 'brick': osc.type = 'triangle'; osc.frequency.setValueAtTime(550, audioCtx.currentTime); gain.gain.setValueAtTime(0.2, audioCtx.currentTime); nGain.gain.setValueAtTime(0.1, audioCtx.currentTime); break;
-            case 'wall': osc.type = 'sine'; osc.frequency.setValueAtTime(150, audioCtx.currentTime); gain.gain.setValueAtTime(0.15, audioCtx.currentTime); nGain.gain.setValueAtTime(0.05, audioCtx.currentTime); break;
-            case 'paddle': osc.type = 'square'; osc.frequency.setValueAtTime(200, audioCtx.currentTime); gain.gain.setValueAtTime(0.25, audioCtx.currentTime); nGain.gain.setValueAtTime(0.15, audioCtx.currentTime); break;
-            case 'powerup': osc.type = 'sine'; osc.frequency.setValueAtTime(440, audioCtx.currentTime); osc.frequency.exponentialRampToValueAtTime(1000, audioCtx.currentTime + 0.2); gain.gain.setValueAtTime(0.2, audioCtx.currentTime); break;
-        }
-        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
-        nGain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.1);
-        osc.connect(gain); gain.connect(audioCtx.destination);
-        noise.connect(nGain); nGain.connect(audioCtx.destination);
-        osc.start(); osc.stop(audioCtx.currentTime + 0.3);
-        noise.start(); noise.stop(audioCtx.currentTime + 0.1);
-    } catch(e) {}
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+    const noise = audioCtx.createBufferSource(), nGain = audioCtx.createGain();
+    noise.buffer = noiseBuffer;
+    switch(type) {
+        case 'brick': osc.type = 'triangle'; osc.frequency.setValueAtTime(550, audioCtx.currentTime); gain.gain.setValueAtTime(0.2, audioCtx.currentTime); nGain.gain.setValueAtTime(0.1, audioCtx.currentTime); break;
+        case 'wall': osc.type = 'sine'; osc.frequency.setValueAtTime(150, audioCtx.currentTime); gain.gain.setValueAtTime(0.15, audioCtx.currentTime); nGain.gain.setValueAtTime(0.05, audioCtx.currentTime); break;
+        case 'paddle': osc.type = 'square'; osc.frequency.setValueAtTime(200, audioCtx.currentTime); gain.gain.setValueAtTime(0.25, audioCtx.currentTime); nGain.gain.setValueAtTime(0.15, audioCtx.currentTime); break;
+        case 'powerup': osc.type = 'sine'; osc.frequency.setValueAtTime(440, audioCtx.currentTime); osc.frequency.exponentialRampToValueAtTime(1000, audioCtx.currentTime + 0.2); gain.gain.setValueAtTime(0.2, audioCtx.currentTime); break;
+    }
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
+    nGain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.1);
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    noise.connect(nGain); nGain.connect(audioCtx.destination);
+    osc.start(); osc.stop(audioCtx.currentTime + 0.3);
+    noise.start(); noise.stop(audioCtx.currentTime + 0.1);
 }
 
-// --- 5. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+// --- 6. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 function drawBallDigit(char, x, y, size, color) {
     const map = digitMaps[char]; if (!map) return;
     const step = size / 4;
@@ -118,7 +130,6 @@ function resize() {
     brickHeight = isLand ? 18 : 25; 
     brickOffsetTop = isLand ? 60 : 110;
     paddleWidth = Math.max(80, canvas.width > 600 ? 120 : canvas.width * 0.35);
-    // ДИНАМИЧЕСКИЙ ОТСТУП РАКЕТКИ
     paddleBottomMargin = isLand ? 25 : 45;
     keepPaddleInBounds();
     bgStars = [];
@@ -148,8 +159,6 @@ function initBricks() {
             };
         }
     }
-    
-    // Защита от пустого уровня
     if (activeBricks === 0) {
         bricks[0][0] = { x: offLeft, y: brickOffsetTop, status: 1, color: '#fff', powerUp: null };
         activeBricks = 1;
@@ -165,7 +174,7 @@ function spawnBall(x, y, dx, dy) {
 function predictLandingX(b) {
     let sX = b.x, sY = b.y, sDX = b.dx, sDY = b.dy;
     const pT = canvas.height - paddleHeight - paddleBottomMargin;
-    for (let i = 0; i < 600; i++) {
+    for (let i = 0; i < 400; i++) {
         sX += sDX; sY += sDY;
         if (sX < ballRadius) { sX = ballRadius; sDX = Math.abs(sDX); }
         else if (sX > canvas.width - ballRadius) { sX = canvas.width - ballRadius; sDX = -Math.abs(sDX); }
@@ -175,12 +184,12 @@ function predictLandingX(b) {
     return sX;
 }
 
-// --- 6. ОБНОВЛЕНИЕ ---
+// --- 7. ОБНОВЛЕНИЕ ---
 function update() {
     if (isGameOver) return;
     const pY = canvas.height - paddleHeight - paddleBottomMargin;
 
-    // 1. ШАРЫ
+    // ШАРЫ
     for (let i = balls.length - 1; i >= 0; i--) {
         let b = balls[i]; 
         if (isNaN(b.x) || isNaN(b.y)) { balls.splice(i, 1); continue; }
@@ -221,7 +230,6 @@ function update() {
                         playNaturalSound('brick'); b.pX = null;
                         for (let k=0; k<6; k++) particles.push({ x: b.x, y: b.y, dx: (Math.random()-0.5)*8, dy: (Math.random()-0.5)*8, life: 1.0, color: br.color });
                         floatingTexts.push({ x: br.x+brickWidth/2, y: br.y, text: "+10", color: br.color, life: 1.0, size: 24 });
-                        // Добавляем dx=0 новому бонусу, чтобы он мог двигаться при ударе
                         if (br.powerUp) powerUps.push({x: br.x+brickWidth/2, y: br.y, type: br.powerUp, dy: 3.2, dx: 0, radius: 11});
                         if (activeBricks <= 0) needsLevelUp = true;
                         break;
@@ -232,17 +240,13 @@ function update() {
         }
     }
 
-    // 2. БОНУСЫ (с физикой отталкивания)
+    // БОНУСЫ (ФИЗИКА)
     for(let i=powerUps.length-1; i>=0; i--) {
         let p = powerUps[i]; 
         let prevY = p.y;
-        
-        // Применяем горизонтальное смещение от ударов (затухание трения 0.95)
-        p.x += (p.dx || 0);
-        p.dx = (p.dx || 0) * 0.95; 
+        p.x += (p.dx || 0); p.dx = (p.dx || 0) * 0.95; 
         p.y += p.dy;
         
-        // Отскок бонусов от стен
         if (p.x < p.radius) { p.x = p.radius; p.dx = -p.dx; }
         if (p.x > canvas.width - p.radius) { p.x = canvas.width - p.radius; p.dx = -p.dx; }
 
@@ -260,8 +264,7 @@ function update() {
         if (p.y > canvas.height) powerUps.splice(i, 1);
     }
 
-    // 3. ГЛОБАЛЬНАЯ ФИЗИКА (Balls vs Balls vs PowerUps)
-    // Собираем всех участников в один массив
+    // ФИЗИКА СТОЛКНОВЕНИЙ
     let physicsEntities = [];
     balls.forEach(b => physicsEntities.push({x: b.x, y: b.y, r: ballRadius, ref: b, type: 'ball'}));
     powerUps.forEach(p => physicsEntities.push({x: p.x, y: p.y, r: p.radius, ref: p, type: 'powerup'}));
@@ -270,47 +273,23 @@ function update() {
         for (let j = i + 1; j < physicsEntities.length; j++) {
             let a = physicsEntities[i];
             let b = physicsEntities[j];
-            
-            let dx = b.x - a.x;
-            let dy = b.y - a.y;
+            let dx = b.x - a.x; let dy = b.y - a.y;
             let dist = Math.sqrt(dx*dx + dy*dy);
             let minDist = a.r + b.r;
 
             if (dist < minDist && dist > 0) {
-                // Вектор нормали столкновения
-                let nx = dx / dist;
-                let ny = dy / dist;
-                
-                // Глубина проникновения (чтобы раздвинуть их)
+                let nx = dx / dist; let ny = dy / dist;
                 let overlap = (minDist - dist) / 2;
-                
-                // Раздвигаем объекты
-                a.ref.x -= nx * overlap;
-                a.ref.y -= ny * overlap;
-                b.ref.x += nx * overlap;
-                b.ref.y += ny * overlap;
+                a.ref.x -= nx * overlap; a.ref.y -= ny * overlap;
+                b.ref.x += nx * overlap; b.ref.y += ny * overlap;
 
-                // Передача импульса (отталкивание)
-                // Сила удара
                 let impulse = 2.0; 
+                if (a.type === 'ball') { a.ref.dx -= nx * impulse; a.ref.dy -= ny * impulse; } 
+                else { a.ref.dx = (a.ref.dx || 0) - nx * impulse * 2; }
 
-                // Если это шар, меняем его dx/dy
-                if (a.type === 'ball') {
-                    a.ref.dx -= nx * impulse;
-                    a.ref.dy -= ny * impulse;
-                } else {
-                    // Если это бонус, меняем его dx (он начинает лететь вбок)
-                    a.ref.dx = (a.ref.dx || 0) - nx * impulse * 2;
-                }
-
-                if (b.type === 'ball') {
-                    b.ref.dx += nx * impulse;
-                    b.ref.dy += ny * impulse;
-                } else {
-                    b.ref.dx = (b.ref.dx || 0) + nx * impulse * 2;
-                }
+                if (b.type === 'ball') { b.ref.dx += nx * impulse; b.ref.dy += ny * impulse; } 
+                else { b.ref.dx = (b.ref.dx || 0) + nx * impulse * 2; }
                 
-                // Звук удара шаров
                 if (a.type === 'ball' && b.type === 'ball') playNaturalSound('wall');
             }
         }
@@ -349,7 +328,7 @@ function update() {
     }
 }
 
-// --- 7. ОТРИСОВКА ---
+// --- 8. ОТРИСОВКА ---
 function drawAll() {
     if (!ctx) return;
     ctx.fillStyle = "#0a0a14"; ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -397,7 +376,7 @@ function gameLoop() {
     animationId = requestAnimationFrame(gameLoop);
 }
 
-// --- 8. ЗАПУСК ---
+// --- 9. ЗАПУСК ---
 function handleSecretToggle() {
     const now = Date.now();
     if (now - lastClickTime < 500) clickCounter++; else clickCounter = 1;
@@ -413,6 +392,7 @@ function endGame(win) {
 }
 
 function startGame() {
+    requestWakeLock(); // <--- ВОТ ОН, НА МЕСТЕ
     initAudio(); 
     if (animationId) { cancelAnimationFrame(animationId); animationId = null; }
     gameStarted = true; isGameOver = false;
