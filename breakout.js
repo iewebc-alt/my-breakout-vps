@@ -11,13 +11,17 @@ let score = 0, level = 1, activeBricks = 0;
 let isGameOver = true, gameStarted = false, autoplay = false;
 let paddleHeight = 15, paddleWidth = 100, paddleX = 0;
 let rightPressed = false, leftPressed = false;
-let balls = [], particles = [], bricks = [], powerUps = [], floatingTexts = [], bgStars = [];
+let balls = [], particles = [], bricks = [], powerUps = [], floatingTexts = [];
 let shakeIntensity = 0, brickHeight = 25, brickOffsetTop = 110;
 let needsLevelUp = false;
 
+// --- КОСМОС (ДИНАМИКА) ---
+let stars = [], starSpeed = 2, starAngle = 0;
+let flightDirX = 0, flightDirY = 0; 
+let rotationSpeed = 0.0005; // Скорость вращения неба
+
 let lastClickTime = 0, clickCounter = 0, animationId = null;
 let isUserTouching = false;
-
 let canvas, ctx, gameOverScreen, statusText, startPrompt, startBtn;
 
 // --- 3. UI КАРТЫ ---
@@ -36,46 +40,30 @@ const patterns = [
     [[0,1,1,1,1,1,0],[1,0,0,0,0,0,1],[1,0,1,0,1,0,1],[1,0,0,0,0,0,1],[1,0,1,1,1,0,1],[0,1,1,1,1,1,0]]
 ];
 
-// --- 4. WAKE LOCK (БЛОКИРОВКА СНА) ---
+// --- 4. WAKE LOCK (УСИЛЕННЫЙ) ---
 let wakeLock = null;
 async function requestWakeLock() {
     try {
         if ('wakeLock' in navigator) {
             wakeLock = await navigator.wakeLock.request('screen');
-            wakeLock.addEventListener('release', () => {
-                // Если блокировка слетела, пробуем вернуть через секунду
-                setTimeout(requestWakeLock, 1000);
-            });
+            wakeLock.addEventListener('release', () => { setTimeout(requestWakeLock, 500); });
         }
     } catch (err) {}
 }
-// Периодическая проверка статуса (страховка)
-setInterval(() => {
-    if (gameStarted && !isGameOver && document.visibilityState === 'visible') requestWakeLock();
-}, 15000);
+// Проверка каждые 10 сек + при касании
+setInterval(() => { if (gameStarted && !isGameOver && document.visibilityState === 'visible') requestWakeLock(); }, 10000);
 
-
-// --- 5. ЗВУКОВОЙ ДВИЖОК ---
+// --- 5. ЗВУК ---
 let audioCtx = null, noiseBuffer = null;
-
 function initAudio() {
-    if (audioCtx && audioCtx.state === 'running') return;
+    if (audioCtx) return;
     try {
-        const AudioContext = window.AudioContext || window.webkitAudioContext;
-        if (!audioCtx) audioCtx = new AudioContext();
-        if (audioCtx.state === 'suspended') audioCtx.resume();
-        
-        if (!noiseBuffer) {
-            const size = audioCtx.sampleRate * 0.1;
-            noiseBuffer = audioCtx.createBuffer(1, size, audioCtx.sampleRate);
-            const data = noiseBuffer.getChannelData(0);
-            for (let i = 0; i < size; i++) data[i] = Math.random() * 2 - 1;
-        }
-        const buffer = audioCtx.createBuffer(1, 1, 22050);
-        const source = audioCtx.createBufferSource();
-        source.buffer = buffer;
-        source.connect(audioCtx.destination);
-        source.start(0);
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const size = audioCtx.sampleRate * 0.1;
+        noiseBuffer = audioCtx.createBuffer(1, size, audioCtx.sampleRate);
+        const data = noiseBuffer.getChannelData(0);
+        for (let i = 0; i < size; i++) data[i] = Math.random() * 2 - 1;
+        const o = audioCtx.createOscillator(); o.start(); o.stop(audioCtx.currentTime + 0.01);
     } catch(e) {}
 }
 
@@ -99,16 +87,13 @@ function playNaturalSound(type) {
     noise.start(); noise.stop(audioCtx.currentTime + 0.1);
 }
 
-// --- 6. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+// --- 6. ВСПОМОГАТЕЛЬНЫЕ ---
 function drawBallDigit(char, x, y, size, color) {
     const map = digitMaps[char]; if (!map) return;
     const step = size / 4;
     ctx.save(); ctx.fillStyle = color;
     for (let i = 0; i < map.length; i++) {
-        if (map[i]) {
-            ctx.beginPath(); ctx.arc(x + (i % 3) * step * 1.3, y + Math.floor(i / 3) * step * 1.3, step / 2, 0, 7);
-            ctx.fill();
-        }
+        if (map[i]) { ctx.beginPath(); ctx.arc(x + (i % 3) * step * 1.3, y + Math.floor(i / 3) * step * 1.3, step / 2, 0, 7); ctx.fill(); }
     }
     ctx.restore();
 }
@@ -123,6 +108,76 @@ function keepPaddleInBounds() {
     if (paddleX > canvas.width - paddleWidth) paddleX = canvas.width - paddleWidth;
 }
 
+// --- 3D КОСМОС (ЛОГИКА) ---
+function initStars() {
+    stars = [];
+    for(let i = 0; i < 200; i++) {
+        stars.push({
+            x: Math.random() * canvas.width - canvas.width/2,
+            y: Math.random() * canvas.height - canvas.height/2,
+            z: Math.random() * canvas.width
+        });
+    }
+}
+
+// Функция случайной смены курса (вызывается таймером)
+function changeFlightCourse() {
+    if (!gameStarted || isGameOver) return;
+    // Плавное изменение вектора
+    const targetX = (Math.random() - 0.5) * 8; 
+    const targetY = (Math.random() - 0.5) * 8;
+    // Изменение скорости
+    const targetSpeed = 1 + Math.random() * 5;
+    // Изменение вращения
+    const targetRot = (Math.random() - 0.5) * 0.002;
+
+    // Анимация перехода параметров (через setInterval для плавности)
+    let step = 0;
+    const interval = setInterval(() => {
+        flightDirX += (targetX - flightDirX) * 0.05;
+        flightDirY += (targetY - flightDirY) * 0.05;
+        starSpeed += (targetSpeed - starSpeed) * 0.05;
+        rotationSpeed += (targetRot - rotationSpeed) * 0.05;
+        step++;
+        if (step > 50) clearInterval(interval);
+    }, 50);
+}
+
+// Запускаем смену курса каждые 8 секунд
+setInterval(changeFlightCourse, 8000);
+
+function updateAndDrawStars() {
+    starAngle += rotationSpeed; 
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+
+    stars.forEach(s => {
+        s.z -= starSpeed;
+        s.x += flightDirX; 
+        s.y += flightDirY;
+
+        if (s.z <= 0) { 
+            s.z = canvas.width; 
+            s.x = Math.random() * canvas.width - cx; 
+            s.y = Math.random() * canvas.height - cy; 
+        }
+
+        let k = 128.0 / s.z;
+        let px = s.x * k + cx;
+        let py = s.y * k + cy;
+
+        let rotX = (px - cx) * Math.cos(starAngle) - (py - cy) * Math.sin(starAngle) + cx;
+        let rotY = (px - cx) * Math.sin(starAngle) + (py - cy) * Math.cos(starAngle) + cy;
+
+        if (rotX > 0 && rotX < canvas.width && rotY > 0 && rotY < canvas.height) {
+            let size = (1 - s.z / canvas.width) * 3;
+            let shade = parseInt((1 - s.z / canvas.width) * 255);
+            ctx.fillStyle = "rgb(" + shade + "," + shade + "," + shade + ")";
+            ctx.fillRect(rotX, rotY, size, size);
+        }
+    });
+}
+
 function resize() {
     if (!canvas) return;
     canvas.width = window.innerWidth; canvas.height = window.innerHeight;
@@ -132,8 +187,7 @@ function resize() {
     paddleWidth = Math.max(80, canvas.width > 600 ? 120 : canvas.width * 0.35);
     paddleBottomMargin = isLand ? 25 : 45;
     keepPaddleInBounds();
-    bgStars = [];
-    for(let i=0; i<80; i++) bgStars.push({ x: Math.random()*canvas.width, y: Math.random()*canvas.height, size: Math.random()*2, opacity: Math.random() });
+    initStars();
     if (gameStarted && !isGameOver) initBricks();
 }
 
@@ -174,7 +228,7 @@ function spawnBall(x, y, dx, dy) {
 function predictLandingX(b) {
     let sX = b.x, sY = b.y, sDX = b.dx, sDY = b.dy;
     const pT = canvas.height - paddleHeight - paddleBottomMargin;
-    for (let i = 0; i < 400; i++) {
+    for (let i = 0; i < 600; i++) {
         sX += sDX; sY += sDY;
         if (sX < ballRadius) { sX = ballRadius; sDX = Math.abs(sDX); }
         else if (sX > canvas.width - ballRadius) { sX = canvas.width - ballRadius; sDX = -Math.abs(sDX); }
@@ -189,7 +243,6 @@ function update() {
     if (isGameOver) return;
     const pY = canvas.height - paddleHeight - paddleBottomMargin;
 
-    // ШАРЫ
     for (let i = balls.length - 1; i >= 0; i--) {
         let b = balls[i]; 
         if (isNaN(b.x) || isNaN(b.y)) { balls.splice(i, 1); continue; }
@@ -215,7 +268,7 @@ function update() {
                 } else if (b.y > canvas.height + 20) {
                     balls.splice(i, 1);
                     if (balls.length === 0) { endGame(false); return; }
-                    break;
+                    break; 
                 }
             }
 
@@ -230,7 +283,7 @@ function update() {
                         playNaturalSound('brick'); b.pX = null;
                         for (let k=0; k<6; k++) particles.push({ x: b.x, y: b.y, dx: (Math.random()-0.5)*8, dy: (Math.random()-0.5)*8, life: 1.0, color: br.color });
                         floatingTexts.push({ x: br.x+brickWidth/2, y: br.y, text: "+10", color: br.color, life: 1.0, size: 24 });
-                        if (br.powerUp) powerUps.push({x: br.x+brickWidth/2, y: br.y, type: br.powerUp, dy: 3.2, dx: 0, radius: 11});
+                        if (br.powerUp) powerUps.push({x: br.x+brickWidth/2, y: br.y, type: br.powerUp, dy: 3.2, radius: 11});
                         if (activeBricks <= 0) needsLevelUp = true;
                         break;
                     }
@@ -240,13 +293,11 @@ function update() {
         }
     }
 
-    // БОНУСЫ (ФИЗИКА)
     for(let i=powerUps.length-1; i>=0; i--) {
         let p = powerUps[i]; 
         let prevY = p.y;
         p.x += (p.dx || 0); p.dx = (p.dx || 0) * 0.95; 
         p.y += p.dy;
-        
         if (p.x < p.radius) { p.x = p.radius; p.dx = -p.dx; }
         if (p.x > canvas.width - p.radius) { p.x = canvas.width - p.radius; p.dx = -p.dx; }
 
@@ -264,38 +315,27 @@ function update() {
         if (p.y > canvas.height) powerUps.splice(i, 1);
     }
 
-    // ФИЗИКА СТОЛКНОВЕНИЙ
     let physicsEntities = [];
     balls.forEach(b => physicsEntities.push({x: b.x, y: b.y, r: ballRadius, ref: b, type: 'ball'}));
     powerUps.forEach(p => physicsEntities.push({x: p.x, y: p.y, r: p.radius, ref: p, type: 'powerup'}));
 
     for (let i = 0; i < physicsEntities.length; i++) {
         for (let j = i + 1; j < physicsEntities.length; j++) {
-            let a = physicsEntities[i];
-            let b = physicsEntities[j];
-            let dx = b.x - a.x; let dy = b.y - a.y;
-            let dist = Math.sqrt(dx*dx + dy*dy);
-            let minDist = a.r + b.r;
-
+            let a = physicsEntities[i], b = physicsEntities[j];
+            let dx = b.x - a.x, dy = b.y - a.y;
+            let dist = Math.sqrt(dx*dx + dy*dy), minDist = a.r + b.r;
             if (dist < minDist && dist > 0) {
-                let nx = dx / dist; let ny = dy / dist;
-                let overlap = (minDist - dist) / 2;
+                let nx = dx / dist, ny = dy / dist, overlap = (minDist - dist) / 2;
                 a.ref.x -= nx * overlap; a.ref.y -= ny * overlap;
                 b.ref.x += nx * overlap; b.ref.y += ny * overlap;
-
                 let impulse = 2.0; 
-                if (a.type === 'ball') { a.ref.dx -= nx * impulse; a.ref.dy -= ny * impulse; } 
-                else { a.ref.dx = (a.ref.dx || 0) - nx * impulse * 2; }
-
-                if (b.type === 'ball') { b.ref.dx += nx * impulse; b.ref.dy += ny * impulse; } 
-                else { b.ref.dx = (b.ref.dx || 0) + nx * impulse * 2; }
-                
+                if (a.type === 'ball') { a.ref.dx -= nx * impulse; a.ref.dy -= ny * impulse; } else { a.ref.dx = (a.ref.dx || 0) - nx * impulse * 2; }
+                if (b.type === 'ball') { b.ref.dx += nx * impulse; b.ref.dy += ny * impulse; } else { b.ref.dx = (b.ref.dx || 0) + nx * impulse * 2; }
                 if (a.type === 'ball' && b.type === 'ball') playNaturalSound('wall');
             }
         }
     }
 
-    // АВТОПИЛОТ
     if (autoplay && balls.length && !isUserTouching) {
         let target = balls.reduce((p, c) => (c.dy > 0 && (!p || c.y > p.y) ? c : p), null);
         let tX = canvas.width / 2;
@@ -331,9 +371,14 @@ function update() {
 // --- 8. ОТРИСОВКА ---
 function drawAll() {
     if (!ctx) return;
-    ctx.fillStyle = "#0a0a14"; ctx.fillRect(0, 0, canvas.width, canvas.height);
-    bgStars.forEach(s => { ctx.fillStyle = `rgba(255,255,255,${s.opacity})`; ctx.fillRect(s.x, s.y, s.size, s.size); });
     
+    // ОЧИСТКА + КОСМОС (С УЧЕТОМ ТРЯСКИ)
+    ctx.fillStyle = "#000"; 
+    ctx.fillRect(0, 0, canvas.width, canvas.height); 
+    
+    // Рисуем звезды
+    updateAndDrawStars();
+
     drawBallString("S", 25, 35, 12, "#fbbf24"); drawBallString(score, 55, 35, 16, "#fff");
     const lX = canvas.width - 110; drawBallString("L", lX, 35, 12, "#3b82f6"); drawBallString(level, lX + 28, 35, 16, "#fff");
 
@@ -376,7 +421,7 @@ function gameLoop() {
     animationId = requestAnimationFrame(gameLoop);
 }
 
-// --- 9. ЗАПУСК ---
+// --- 9. ЗАПУСК И УПРАВЛЕНИЕ ---
 function handleSecretToggle() {
     const now = Date.now();
     if (now - lastClickTime < 500) clickCounter++; else clickCounter = 1;
@@ -392,7 +437,7 @@ function endGame(win) {
 }
 
 function startGame() {
-    requestWakeLock(); // <--- ВОТ ОН, НА МЕСТЕ
+    requestWakeLock();
     initAudio(); 
     if (animationId) { cancelAnimationFrame(animationId); animationId = null; }
     gameStarted = true; isGameOver = false;
@@ -416,12 +461,9 @@ document.addEventListener("DOMContentLoaded", () => {
     gameOverScreen = document.getElementById("game-over"); statusText = document.getElementById("status-text");
     startPrompt = document.getElementById("start-prompt"); startBtn = document.getElementById("start-btn");
     
-    const unlock = () => { initAudio(); };
-    window.addEventListener('touchstart', unlock, {once:true});
-    window.addEventListener('click', unlock, {once:true});
-
     startBtn.onclick = () => {
         initAudio();
+        requestWakeLock(); // Дублируем вызов для надежности
         if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
             DeviceOrientationEvent.requestPermission().then(state => {
                 if (state === 'granted') window.addEventListener('deviceorientation', handleOrientation);
@@ -434,12 +476,9 @@ document.addEventListener("DOMContentLoaded", () => {
     };
 
     canvas.addEventListener("pointerdown", e => { 
-        if (e.clientY < 100) {
-            const now = Date.now();
-            if (now - lastClickTime < 500) clickCounter++; else clickCounter = 1;
-            lastClickTime = now;
-            if (clickCounter >= 3) { handleSecretToggle(); clickCounter = 0; }
-        } else isUserTouching = true;
+        requestWakeLock(); // Поддерживаем активность экрана
+        if (e.clientY < 100) handleSecretToggle();
+        else isUserTouching = true;
     });
     canvas.addEventListener("pointerup", () => isUserTouching = false);
     
