@@ -36,6 +36,31 @@ const patterns = [
     [[0,1,1,1,1,1,0],[1,0,0,0,0,0,1],[1,0,1,0,1,0,1],[1,0,0,0,0,0,1],[1,0,1,1,1,0,1],[0,1,1,1,1,1,0]]
 ];
 
+// --- WAKE LOCK (БЛОКИРОВКА СНА) ---
+let wakeLock = null;
+
+async function requestWakeLock() {
+    try {
+        if ('wakeLock' in navigator) {
+            wakeLock = await navigator.wakeLock.request('screen');
+            console.log('Screen Wake Lock active');
+            
+            wakeLock.addEventListener('release', () => {
+                console.log('Screen Wake Lock released');
+            });
+        }
+    } catch (err) {
+        console.error(`Wake Lock error: ${err.name}, ${err.message}`);
+    }
+}
+
+// Перезапуск блокировки при возвращении в игру
+document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState === 'visible' && gameStarted) {
+        await requestWakeLock();
+    }
+});
+
 // --- 4. ЗВУК (SAFE MODE) ---
 let audioCtx = null, noiseBuffer = null;
 
@@ -192,7 +217,8 @@ function update() {
         
         if (b.y < ballRadius) { b.y = ballRadius; b.dy = Math.abs(b.dy); playNaturalSound('wall'); b.pX = null; }
         else if (b.y + ballRadius > pY) {
-            if (b.x >= paddleX - ballRadius && b.x <= paddleX + paddleWidth + ballRadius && b.y < pY + paddleHeight) {
+            // Коллизия основного шара (расширенная на 2px для надежности)
+            if (b.x >= paddleX - ballRadius - 2 && b.x <= paddleX + paddleWidth + ballRadius + 2 && b.y < pY + paddleHeight) {
                 b.y = pY - ballRadius; b.dy = -Math.abs(b.dy);
                 b.dx = ((b.x - (paddleX + paddleWidth/2)) / (paddleWidth/2)) * 9;
                 playNaturalSound('paddle'); b.pX = null; b.off = (Math.random()-0.5)*paddleWidth*0.7;
@@ -209,23 +235,35 @@ function update() {
                 playNaturalSound('brick'); b.pX = null;
                 for (let k=0; k<6; k++) particles.push({ x: b.x, y: b.y, dx: (Math.random()-0.5)*8, dy: (Math.random()-0.5)*8, life: 1.0, color: br.color });
                 floatingTexts.push({ x: br.x+brickWidth/2, y: br.y, text: "+10", color: br.color, life: 1.0, size: 24 });
-                if (br.powerUp) powerUps.push({x: br.x+brickWidth/2, y: br.y, type: br.powerUp, dy: 3.2});
+                if (br.powerUp) powerUps.push({x: br.x+brickWidth/2, y: br.y, type: br.powerUp, dy: 3.2, radius: 11}); // Добавил радиус в объект
                 if (activeBricks <= 0) needsLevelUp = true;
             }
         }));
     }
 
-    // БОНУСЫ
+    // БОНУСЫ (ИСПРАВЛЕН ПРОЛЕТ СКВОЗЬ КРАЙ)
     for(let i=powerUps.length-1; i>=0; i--) {
-        let p = powerUps[i]; p.y += 3.2;
-        if (p.y + 11 >= pY && p.y - 11 <= pY + paddleHeight && p.x >= paddleX && p.x <= paddleX + paddleWidth) {
-            if (p.type === 'extraBall') spawnBall();
-            else if (p.type === 'widerPaddle') { 
-                let orig = (canvas.width > 600 ? 120 : canvas.width * 0.35); 
-                paddleWidth *= 1.5; setTimeout(()=> { if(!isGameOver) paddleWidth = orig; }, 10000); 
+        let p = powerUps[i]; 
+        let prevY = p.y;
+        p.y += 3.2; // Скорость падения
+        
+        // Проверяем пересечение отрезка (Raycasting)
+        // Если бонус пересек линию верха ракетки за этот кадр
+        if (p.y + 11 >= pY && prevY + 11 <= pY + paddleHeight) {
+            // Проверяем горизонтальное попадание с учетом радиуса бонуса (11px)
+            if (p.x + 11 >= paddleX && p.x - 11 <= paddleX + paddleWidth) {
+                if (p.type === 'extraBall') spawnBall();
+                else if (p.type === 'widerPaddle') { 
+                    let orig = (canvas.width > 600 ? 120 : canvas.width * 0.35); 
+                    paddleWidth *= 1.5; setTimeout(()=> { if(!isGameOver) paddleWidth = orig; }, 10000); 
+                }
+                powerUps.splice(i, 1); 
+                playNaturalSound('powerup');
+                continue; // Переходим к следующему бонусу
             }
-            powerUps.splice(i, 1); playNaturalSound('powerup');
-        } else if (p.y > canvas.height) powerUps.splice(i, 1);
+        } 
+        
+        if (p.y > canvas.height) powerUps.splice(i, 1);
     }
 
     // АВТОПИЛОТ
@@ -326,6 +364,7 @@ function endGame(win) {
 
 function startGame() {
     initAudio(); 
+    requestWakeLock(); // <--- ВОТ ЭТА СТРОКА ДОЛЖНА БЫТЬ
     if (animationId) { cancelAnimationFrame(animationId); animationId = null; }
     gameStarted = true; isGameOver = false;
     if(startPrompt) startPrompt.style.display = "none";
