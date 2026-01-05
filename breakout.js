@@ -1,5 +1,5 @@
 // --- 1. НАСТРОЙКИ ---
-const paddleBottomMargin = 45;
+let paddleBottomMargin = 45; // let, чтобы можно было менять в resize
 const maxAutoplaySpeed = 26;
 const ballRadius = 8;
 const brickWidth = 60;   
@@ -36,31 +36,6 @@ const patterns = [
     [[0,1,1,1,1,1,0],[1,0,0,0,0,0,1],[1,0,1,0,1,0,1],[1,0,0,0,0,0,1],[1,0,1,1,1,0,1],[0,1,1,1,1,1,0]]
 ];
 
-// --- WAKE LOCK (БЛОКИРОВКА СНА) ---
-let wakeLock = null;
-
-async function requestWakeLock() {
-    try {
-        if ('wakeLock' in navigator) {
-            wakeLock = await navigator.wakeLock.request('screen');
-            console.log('Screen Wake Lock active');
-            
-            wakeLock.addEventListener('release', () => {
-                console.log('Screen Wake Lock released');
-            });
-        }
-    } catch (err) {
-        console.error(`Wake Lock error: ${err.name}, ${err.message}`);
-    }
-}
-
-// Перезапуск блокировки при возвращении в игру
-document.addEventListener('visibilitychange', async () => {
-    if (document.visibilityState === 'visible' && gameStarted) {
-        await requestWakeLock();
-    }
-});
-
 // --- 4. ЗВУК (SAFE MODE) ---
 let audioCtx = null, noiseBuffer = null;
 
@@ -81,13 +56,12 @@ function initAudio() {
             for (let i = 0; i < size; i++) data[i] = Math.random() * 2 - 1;
         } catch(e) { }
 
-        // Тихий старт для разблокировки
         const osc = audioCtx.createOscillator();
         const g = audioCtx.createGain();
         g.gain.value = 0.001;
         osc.connect(g); g.connect(audioCtx.destination);
         osc.start(); osc.stop(audioCtx.currentTime + 0.01);
-    } catch(e) { console.warn("Audio init failed"); }
+    } catch(e) {}
 }
 
 function playNaturalSound(type) {
@@ -144,6 +118,8 @@ function resize() {
     brickHeight = isLand ? 18 : 25; 
     brickOffsetTop = isLand ? 60 : 110;
     paddleWidth = Math.max(80, canvas.width > 600 ? 120 : canvas.width * 0.35);
+    // ДИНАМИЧЕСКИЙ ОТСТУП РАКЕТКИ
+    paddleBottomMargin = isLand ? 25 : 45;
     keepPaddleInBounds();
     bgStars = [];
     for(let i=0; i<80; i++) bgStars.push({ x: Math.random()*canvas.width, y: Math.random()*canvas.height, size: Math.random()*2, opacity: Math.random() });
@@ -173,7 +149,7 @@ function initBricks() {
         }
     }
     
-    // ЗАЩИТА ОТ ПУСТОГО УРОВНЯ (ФИКС ЗАВИСАНИЯ)
+    // Защита от пустого уровня
     if (activeBricks === 0) {
         bricks[0][0] = { x: offLeft, y: brickOffsetTop, status: 1, color: '#fff', powerUp: null };
         activeBricks = 1;
@@ -189,7 +165,7 @@ function spawnBall(x, y, dx, dy) {
 function predictLandingX(b) {
     let sX = b.x, sY = b.y, sDX = b.dx, sDY = b.dy;
     const pT = canvas.height - paddleHeight - paddleBottomMargin;
-    for (let i = 0; i < 400; i++) {
+    for (let i = 0; i < 600; i++) {
         sX += sDX; sY += sDY;
         if (sX < ballRadius) { sX = ballRadius; sDX = Math.abs(sDX); }
         else if (sX > canvas.width - ballRadius) { sX = canvas.width - ballRadius; sDX = -Math.abs(sDX); }
@@ -204,66 +180,140 @@ function update() {
     if (isGameOver) return;
     const pY = canvas.height - paddleHeight - paddleBottomMargin;
 
-    // ШАРЫ
+    // 1. ШАРЫ
     for (let i = balls.length - 1; i >= 0; i--) {
         let b = balls[i]; 
         if (isNaN(b.x) || isNaN(b.y)) { balls.splice(i, 1); continue; }
 
-        b.x += b.dx; b.y += b.dy;
-        if (Math.abs(b.dx) < 0.8) b.dx += (b.dx < 0 ? -1.5 : 1.5);
+        let speed = Math.sqrt(b.dx*b.dx + b.dy*b.dy);
+        let steps = (speed > ballRadius) ? 2 : 1;
+        let stepDX = b.dx / steps;
+        let stepDY = b.dy / steps;
 
-        if (b.x < ballRadius) { b.x = ballRadius; b.dx = Math.abs(b.dx); playNaturalSound('wall'); b.pX = null; }
-        else if (b.x > canvas.width - ballRadius) { b.x = canvas.width - ballRadius; b.dx = -Math.abs(b.dx); playNaturalSound('wall'); b.pX = null; }
-        
-        if (b.y < ballRadius) { b.y = ballRadius; b.dy = Math.abs(b.dy); playNaturalSound('wall'); b.pX = null; }
-        else if (b.y + ballRadius > pY) {
-            // Коллизия основного шара (расширенная на 2px для надежности)
-            if (b.x >= paddleX - ballRadius - 2 && b.x <= paddleX + paddleWidth + ballRadius + 2 && b.y < pY + paddleHeight) {
-                b.y = pY - ballRadius; b.dy = -Math.abs(b.dy);
-                b.dx = ((b.x - (paddleX + paddleWidth/2)) / (paddleWidth/2)) * 9;
-                playNaturalSound('paddle'); b.pX = null; b.off = (Math.random()-0.5)*paddleWidth*0.7;
-            } else if (b.y > canvas.height + 20) {
-                balls.splice(i, 1);
-                if (balls.length === 0) { endGame(false); return; }
+        for (let s = 0; s < steps; s++) {
+            b.x += stepDX; b.y += stepDY;
+            if (Math.abs(b.dx) < 0.8) b.dx += (b.dx < 0 ? -0.5 : 0.5);
+
+            if (b.x < ballRadius) { b.x = ballRadius; b.dx = Math.abs(b.dx); playNaturalSound('wall'); b.pX = null; }
+            else if (b.x > canvas.width - ballRadius) { b.x = canvas.width - ballRadius; b.dx = -Math.abs(b.dx); playNaturalSound('wall'); b.pX = null; }
+            
+            if (b.y < ballRadius) { b.y = ballRadius; b.dy = Math.abs(b.dy); playNaturalSound('wall'); b.pX = null; }
+            else if (b.y + ballRadius > pY) {
+                if (b.x >= paddleX - ballRadius - 2 && b.x <= paddleX + paddleWidth + ballRadius + 2 && b.y < pY + paddleHeight) {
+                    b.y = pY - ballRadius; b.dy = -Math.abs(b.dy);
+                    b.dx = ((b.x - (paddleX + paddleWidth/2)) / (paddleWidth/2)) * 9;
+                    playNaturalSound('paddle'); b.pX = null; b.off = (Math.random()-0.5)*paddleWidth*0.7;
+                } else if (b.y > canvas.height + 20) {
+                    balls.splice(i, 1);
+                    if (balls.length === 0) { endGame(false); return; }
+                    break;
+                }
+            }
+
+            let hit = false;
+            for (let c = 0; c < bricks.length; c++) {
+                for (let r = 0; r < bricks[c].length; r++) {
+                    let br = bricks[c][r];
+                    if (br.status && b.x+ballRadius > br.x && b.x-ballRadius < br.x+brickWidth && b.y+ballRadius > br.y && b.y-ballRadius < br.y+brickHeight) {
+                        br.status = 0; b.dy = -b.dy; score += 10; activeBricks--;
+                        hit = true;
+                        if (br.powerUp) shakeIntensity = 10; 
+                        playNaturalSound('brick'); b.pX = null;
+                        for (let k=0; k<6; k++) particles.push({ x: b.x, y: b.y, dx: (Math.random()-0.5)*8, dy: (Math.random()-0.5)*8, life: 1.0, color: br.color });
+                        floatingTexts.push({ x: br.x+brickWidth/2, y: br.y, text: "+10", color: br.color, life: 1.0, size: 24 });
+                        // Добавляем dx=0 новому бонусу, чтобы он мог двигаться при ударе
+                        if (br.powerUp) powerUps.push({x: br.x+brickWidth/2, y: br.y, type: br.powerUp, dy: 3.2, dx: 0, radius: 11});
+                        if (activeBricks <= 0) needsLevelUp = true;
+                        break;
+                    }
+                }
+                if (hit) break;
             }
         }
-
-        bricks.forEach(col => col.forEach(br => {
-            if (br.status && b.x+ballRadius > br.x && b.x-ballRadius < br.x+brickWidth && b.y+ballRadius > br.y && b.y-ballRadius < br.y+brickHeight) {
-                br.status = 0; b.dy = -b.dy; score += 10; activeBricks--;
-                if (br.powerUp) shakeIntensity = 10; 
-                playNaturalSound('brick'); b.pX = null;
-                for (let k=0; k<6; k++) particles.push({ x: b.x, y: b.y, dx: (Math.random()-0.5)*8, dy: (Math.random()-0.5)*8, life: 1.0, color: br.color });
-                floatingTexts.push({ x: br.x+brickWidth/2, y: br.y, text: "+10", color: br.color, life: 1.0, size: 24 });
-                if (br.powerUp) powerUps.push({x: br.x+brickWidth/2, y: br.y, type: br.powerUp, dy: 3.2, radius: 11}); // Добавил радиус в объект
-                if (activeBricks <= 0) needsLevelUp = true;
-            }
-        }));
     }
 
-    // БОНУСЫ (ИСПРАВЛЕН ПРОЛЕТ СКВОЗЬ КРАЙ)
+    // 2. БОНУСЫ (с физикой отталкивания)
     for(let i=powerUps.length-1; i>=0; i--) {
         let p = powerUps[i]; 
         let prevY = p.y;
-        p.y += 3.2; // Скорость падения
         
-        // Проверяем пересечение отрезка (Raycasting)
-        // Если бонус пересек линию верха ракетки за этот кадр
+        // Применяем горизонтальное смещение от ударов (затухание трения 0.95)
+        p.x += (p.dx || 0);
+        p.dx = (p.dx || 0) * 0.95; 
+        p.y += p.dy;
+        
+        // Отскок бонусов от стен
+        if (p.x < p.radius) { p.x = p.radius; p.dx = -p.dx; }
+        if (p.x > canvas.width - p.radius) { p.x = canvas.width - p.radius; p.dx = -p.dx; }
+
         if (p.y + 11 >= pY && prevY + 11 <= pY + paddleHeight) {
-            // Проверяем горизонтальное попадание с учетом радиуса бонуса (11px)
             if (p.x + 11 >= paddleX && p.x - 11 <= paddleX + paddleWidth) {
-                if (p.type === 'extraBall') spawnBall();
+                if (p.type === 'extraBall') spawnBall(p.x, pY - 10);
                 else if (p.type === 'widerPaddle') { 
                     let orig = (canvas.width > 600 ? 120 : canvas.width * 0.35); 
                     paddleWidth *= 1.5; setTimeout(()=> { if(!isGameOver) paddleWidth = orig; }, 10000); 
                 }
-                powerUps.splice(i, 1); 
-                playNaturalSound('powerup');
-                continue; // Переходим к следующему бонусу
+                powerUps.splice(i, 1); playNaturalSound('powerup');
+                continue;
             }
         } 
-        
         if (p.y > canvas.height) powerUps.splice(i, 1);
+    }
+
+    // 3. ГЛОБАЛЬНАЯ ФИЗИКА (Balls vs Balls vs PowerUps)
+    // Собираем всех участников в один массив
+    let physicsEntities = [];
+    balls.forEach(b => physicsEntities.push({x: b.x, y: b.y, r: ballRadius, ref: b, type: 'ball'}));
+    powerUps.forEach(p => physicsEntities.push({x: p.x, y: p.y, r: p.radius, ref: p, type: 'powerup'}));
+
+    for (let i = 0; i < physicsEntities.length; i++) {
+        for (let j = i + 1; j < physicsEntities.length; j++) {
+            let a = physicsEntities[i];
+            let b = physicsEntities[j];
+            
+            let dx = b.x - a.x;
+            let dy = b.y - a.y;
+            let dist = Math.sqrt(dx*dx + dy*dy);
+            let minDist = a.r + b.r;
+
+            if (dist < minDist && dist > 0) {
+                // Вектор нормали столкновения
+                let nx = dx / dist;
+                let ny = dy / dist;
+                
+                // Глубина проникновения (чтобы раздвинуть их)
+                let overlap = (minDist - dist) / 2;
+                
+                // Раздвигаем объекты
+                a.ref.x -= nx * overlap;
+                a.ref.y -= ny * overlap;
+                b.ref.x += nx * overlap;
+                b.ref.y += ny * overlap;
+
+                // Передача импульса (отталкивание)
+                // Сила удара
+                let impulse = 2.0; 
+
+                // Если это шар, меняем его dx/dy
+                if (a.type === 'ball') {
+                    a.ref.dx -= nx * impulse;
+                    a.ref.dy -= ny * impulse;
+                } else {
+                    // Если это бонус, меняем его dx (он начинает лететь вбок)
+                    a.ref.dx = (a.ref.dx || 0) - nx * impulse * 2;
+                }
+
+                if (b.type === 'ball') {
+                    b.ref.dx += nx * impulse;
+                    b.ref.dy += ny * impulse;
+                } else {
+                    b.ref.dx = (b.ref.dx || 0) + nx * impulse * 2;
+                }
+                
+                // Звук удара шаров
+                if (a.type === 'ball' && b.type === 'ball') playNaturalSound('wall');
+            }
+        }
     }
 
     // АВТОПИЛОТ
@@ -364,7 +414,6 @@ function endGame(win) {
 
 function startGame() {
     initAudio(); 
-    requestWakeLock(); // <--- ВОТ ЭТА СТРОКА ДОЛЖНА БЫТЬ
     if (animationId) { cancelAnimationFrame(animationId); animationId = null; }
     gameStarted = true; isGameOver = false;
     if(startPrompt) startPrompt.style.display = "none";
