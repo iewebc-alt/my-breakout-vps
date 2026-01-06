@@ -11,18 +11,24 @@ let score = 0, level = 1, activeBricks = 0;
 let isGameOver = true, gameStarted = false, autoplay = false;
 let paddleHeight = 15, paddleWidth = 100, paddleX = 0;
 let rightPressed = false, leftPressed = false;
-let balls = [], particles = [], bricks = [], powerUps = [], floatingTexts = [];
+let balls = [], particles = [], bricks = [], powerUps = [], floatingTexts = [], bgStars = [];
 let shakeIntensity = 0, brickHeight = 25, brickOffsetTop = 110;
 let needsLevelUp = false;
 
-// --- КОСМОС (ДИНАМИКА) ---
+// КОСМОС
 let stars = [], starSpeed = 2, starAngle = 0;
-let flightDirX = 0, flightDirY = 0; 
-let rotationSpeed = 0.0005; // Скорость вращения неба
+let flightDirX = 0, flightDirY = 0, rotationSpeed = 0.0005;
+
+// НАСТРОЙКИ
+let isSoundOn = true;
+let isGyroOn = true;
+let isGyroInverted = false;
+let gyroSensitivity = 1.3;
 
 let lastClickTime = 0, clickCounter = 0, animationId = null;
 let isUserTouching = false;
-let canvas, ctx, gameOverScreen, statusText, startPrompt, startBtn;
+
+let canvas, ctx, gameOverScreen, statusText, scoreText, startPrompt, startBtn;
 
 // --- 3. UI КАРТЫ ---
 const digitMaps = {
@@ -34,60 +40,124 @@ const digitMaps = {
     'S': [0,1,1, 1,0,0, 0,1,0, 0,0,1, 1,1,0], 'L': [1,0,0, 1,0,0, 1,0,0, 1,0,0, 1,1,1]
 };
 
-const patterns = [
-    [[0,0,0,1,1,0,0,0],[0,0,1,1,1,1,0,0],[0,1,1,1,1,1,1,0],[1,1,1,1,1,1,1,1]],
-    [[0,1,1,0,1,1,0],[1,1,1,1,1,1,1],[1,1,1,1,1,1,1],[0,1,1,1,1,1,0],[0,0,1,1,1,0,0],[0,0,0,1,0,0,0]],
-    [[0,1,1,1,1,1,0],[1,0,0,0,0,0,1],[1,0,1,0,1,0,1],[1,0,0,0,0,0,1],[1,0,1,1,1,0,1],[0,1,1,1,1,1,0]]
-];
-
-// --- 4. WAKE LOCK (УСИЛЕННЫЙ) ---
+// --- 4. WAKE LOCK ---
 let wakeLock = null;
 async function requestWakeLock() {
     try {
         if ('wakeLock' in navigator) {
             wakeLock = await navigator.wakeLock.request('screen');
-            wakeLock.addEventListener('release', () => { setTimeout(requestWakeLock, 500); });
+            wakeLock.addEventListener('release', () => { setTimeout(requestWakeLock, 1000); });
         }
     } catch (err) {}
 }
-// Проверка каждые 10 сек + при касании
-setInterval(() => { if (gameStarted && !isGameOver && document.visibilityState === 'visible') requestWakeLock(); }, 10000);
+setInterval(() => { if (gameStarted && !isGameOver && document.visibilityState === 'visible') requestWakeLock(); }, 15000);
 
 // --- 5. ЗВУК ---
 let audioCtx = null, noiseBuffer = null;
+
 function initAudio() {
-    if (audioCtx) return;
+    if (audioCtx) {
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        return;
+    }
     try {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        const size = audioCtx.sampleRate * 0.1;
-        noiseBuffer = audioCtx.createBuffer(1, size, audioCtx.sampleRate);
-        const data = noiseBuffer.getChannelData(0);
-        for (let i = 0; i < size; i++) data[i] = Math.random() * 2 - 1;
-        const o = audioCtx.createOscillator(); o.start(); o.stop(audioCtx.currentTime + 0.01);
-    } catch(e) {}
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContext) return;
+        audioCtx = new AudioContext();
+        
+        try {
+            const size = audioCtx.sampleRate * 0.1;
+            noiseBuffer = audioCtx.createBuffer(1, size, audioCtx.sampleRate);
+            const data = noiseBuffer.getChannelData(0);
+            for (let i = 0; i < size; i++) data[i] = Math.random() * 2 - 1;
+        } catch(e) { }
+
+        const osc = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        g.gain.value = 0.001;
+        osc.connect(g); g.connect(audioCtx.destination);
+        osc.start(); osc.stop(audioCtx.currentTime + 0.01);
+    } catch(e) { console.warn("Audio init failed"); }
 }
 
 function playNaturalSound(type) {
+    if (!isSoundOn) return;
     if (!audioCtx || !noiseBuffer) return;
-    if (audioCtx.state === 'suspended') audioCtx.resume();
-    const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
-    const noise = audioCtx.createBufferSource(), nGain = audioCtx.createGain();
-    noise.buffer = noiseBuffer;
-    switch(type) {
-        case 'brick': osc.type = 'triangle'; osc.frequency.setValueAtTime(550, audioCtx.currentTime); gain.gain.setValueAtTime(0.2, audioCtx.currentTime); nGain.gain.setValueAtTime(0.1, audioCtx.currentTime); break;
-        case 'wall': osc.type = 'sine'; osc.frequency.setValueAtTime(150, audioCtx.currentTime); gain.gain.setValueAtTime(0.15, audioCtx.currentTime); nGain.gain.setValueAtTime(0.05, audioCtx.currentTime); break;
-        case 'paddle': osc.type = 'square'; osc.frequency.setValueAtTime(200, audioCtx.currentTime); gain.gain.setValueAtTime(0.25, audioCtx.currentTime); nGain.gain.setValueAtTime(0.15, audioCtx.currentTime); break;
-        case 'powerup': osc.type = 'sine'; osc.frequency.setValueAtTime(440, audioCtx.currentTime); osc.frequency.exponentialRampToValueAtTime(1000, audioCtx.currentTime + 0.2); gain.gain.setValueAtTime(0.2, audioCtx.currentTime); break;
-    }
-    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
-    nGain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.1);
-    osc.connect(gain); gain.connect(audioCtx.destination);
-    noise.connect(nGain); nGain.connect(audioCtx.destination);
-    osc.start(); osc.stop(audioCtx.currentTime + 0.3);
-    noise.start(); noise.stop(audioCtx.currentTime + 0.1);
+    try {
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+        const noise = audioCtx.createBufferSource(), nGain = audioCtx.createGain();
+        noise.buffer = noiseBuffer;
+
+        switch(type) {
+            case 'brick': osc.type = 'triangle'; osc.frequency.setValueAtTime(550, audioCtx.currentTime); gain.gain.setValueAtTime(0.2, audioCtx.currentTime); nGain.gain.setValueAtTime(0.1, audioCtx.currentTime); break;
+            case 'wall': osc.type = 'sine'; osc.frequency.setValueAtTime(150, audioCtx.currentTime); gain.gain.setValueAtTime(0.15, audioCtx.currentTime); nGain.gain.setValueAtTime(0.05, audioCtx.currentTime); break;
+            case 'paddle': osc.type = 'square'; osc.frequency.setValueAtTime(200, audioCtx.currentTime); gain.gain.setValueAtTime(0.25, audioCtx.currentTime); nGain.gain.setValueAtTime(0.15, audioCtx.currentTime); break;
+            case 'powerup': osc.type = 'sine'; osc.frequency.setValueAtTime(440, audioCtx.currentTime); osc.frequency.exponentialRampToValueAtTime(1000, audioCtx.currentTime + 0.2); gain.gain.setValueAtTime(0.2, audioCtx.currentTime); break;
+        }
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
+        nGain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.1);
+        osc.connect(gain); gain.connect(audioCtx.destination);
+        noise.connect(nGain); nGain.connect(audioCtx.destination);
+        osc.start(); osc.stop(audioCtx.currentTime + 0.3);
+        noise.start(); noise.stop(audioCtx.currentTime + 0.1);
+    } catch(e) {}
 }
 
-// --- 6. ВСПОМОГАТЕЛЬНЫЕ ---
+// --- 6. КОСМОС (ДИНАМИКА) ---
+function initStars() {
+    stars = [];
+    for(let i = 0; i < 200; i++) {
+        stars.push({
+            x: Math.random() * canvas.width - canvas.width/2,
+            y: Math.random() * canvas.height - canvas.height/2,
+            z: Math.random() * canvas.width
+        });
+    }
+}
+
+function changeFlightCourse() {
+    if (!gameStarted || isGameOver) return;
+    const targetX = (Math.random() - 0.5) * 15; 
+    const targetY = (Math.random() - 0.5) * 15;
+    const targetSpeed = 2 + Math.random() * 10;
+    const targetRot = (Math.random() - 0.5) * 0.02;
+
+    let step = 0;
+    const interval = setInterval(() => {
+        flightDirX += (targetX - flightDirX) * 0.05;
+        flightDirY += (targetY - flightDirY) * 0.05;
+        starSpeed += (targetSpeed - starSpeed) * 0.05;
+        rotationSpeed += (targetRot - rotationSpeed) * 0.05;
+        step++;
+        if (step > 60) clearInterval(interval);
+    }, 50);
+}
+setInterval(changeFlightCourse, 7000);
+
+function updateAndDrawStars() {
+    starAngle += rotationSpeed; 
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+
+    stars.forEach(s => {
+        s.z -= starSpeed;
+        s.x += flightDirX; s.y += flightDirY;
+        if (s.z <= 0) { s.z = canvas.width; s.x = Math.random() * canvas.width - cx; s.y = Math.random() * canvas.height - cy; }
+        let k = 128.0 / s.z;
+        let px = s.x * k + cx; let py = s.y * k + cy;
+        let rotX = (px - cx) * Math.cos(starAngle) - (py - cy) * Math.sin(starAngle) + cx;
+        let rotY = (px - cx) * Math.sin(starAngle) + (py - cy) * Math.cos(starAngle) + cy;
+        if (rotX > 0 && rotX < canvas.width && rotY > 0 && rotY < canvas.height) {
+            let size = (1 - s.z / canvas.width) * 3;
+            let shade = parseInt((1 - s.z / canvas.width) * 255);
+            ctx.fillStyle = "rgb(" + shade + "," + shade + "," + shade + ")";
+            ctx.fillRect(rotX, rotY, size, size);
+        }
+    });
+}
+
+// --- 7. ВСПОМОГАТЕЛЬНЫЕ ---
 function drawBallDigit(char, x, y, size, color) {
     const map = digitMaps[char]; if (!map) return;
     const step = size / 4;
@@ -108,76 +178,6 @@ function keepPaddleInBounds() {
     if (paddleX > canvas.width - paddleWidth) paddleX = canvas.width - paddleWidth;
 }
 
-// --- 3D КОСМОС (ЛОГИКА) ---
-function initStars() {
-    stars = [];
-    for(let i = 0; i < 200; i++) {
-        stars.push({
-            x: Math.random() * canvas.width - canvas.width/2,
-            y: Math.random() * canvas.height - canvas.height/2,
-            z: Math.random() * canvas.width
-        });
-    }
-}
-
-// Функция случайной смены курса (вызывается таймером)
-function changeFlightCourse() {
-    if (!gameStarted || isGameOver) return;
-    // Плавное изменение вектора
-    const targetX = (Math.random() - 0.5) * 8; 
-    const targetY = (Math.random() - 0.5) * 8;
-    // Изменение скорости
-    const targetSpeed = 1 + Math.random() * 5;
-    // Изменение вращения
-    const targetRot = (Math.random() - 0.5) * 0.002;
-
-    // Анимация перехода параметров (через setInterval для плавности)
-    let step = 0;
-    const interval = setInterval(() => {
-        flightDirX += (targetX - flightDirX) * 0.05;
-        flightDirY += (targetY - flightDirY) * 0.05;
-        starSpeed += (targetSpeed - starSpeed) * 0.05;
-        rotationSpeed += (targetRot - rotationSpeed) * 0.05;
-        step++;
-        if (step > 50) clearInterval(interval);
-    }, 50);
-}
-
-// Запускаем смену курса каждые 8 секунд
-setInterval(changeFlightCourse, 8000);
-
-function updateAndDrawStars() {
-    starAngle += rotationSpeed; 
-    const cx = canvas.width / 2;
-    const cy = canvas.height / 2;
-
-    stars.forEach(s => {
-        s.z -= starSpeed;
-        s.x += flightDirX; 
-        s.y += flightDirY;
-
-        if (s.z <= 0) { 
-            s.z = canvas.width; 
-            s.x = Math.random() * canvas.width - cx; 
-            s.y = Math.random() * canvas.height - cy; 
-        }
-
-        let k = 128.0 / s.z;
-        let px = s.x * k + cx;
-        let py = s.y * k + cy;
-
-        let rotX = (px - cx) * Math.cos(starAngle) - (py - cy) * Math.sin(starAngle) + cx;
-        let rotY = (px - cx) * Math.sin(starAngle) + (py - cy) * Math.cos(starAngle) + cy;
-
-        if (rotX > 0 && rotX < canvas.width && rotY > 0 && rotY < canvas.height) {
-            let size = (1 - s.z / canvas.width) * 3;
-            let shade = parseInt((1 - s.z / canvas.width) * 255);
-            ctx.fillStyle = "rgb(" + shade + "," + shade + "," + shade + ")";
-            ctx.fillRect(rotX, rotY, size, size);
-        }
-    });
-}
-
 function resize() {
     if (!canvas) return;
     canvas.width = window.innerWidth; canvas.height = window.innerHeight;
@@ -191,6 +191,7 @@ function resize() {
     if (gameStarted && !isGameOver) initBricks();
 }
 
+// --- 8. ГЕНЕРАТОР УРОВНЕЙ (АДАПТИВНЫЙ) ---
 function initBricks() {
     bricks = []; activeBricks = 0;
     const brickColumnCount = Math.floor((canvas.width - 20) / (brickWidth + brickPadding));
@@ -198,17 +199,26 @@ function initBricks() {
 
     const totalW = brickColumnCount * (brickWidth + brickPadding) - brickPadding;
     const offLeft = (canvas.width - totalW) / 2;
-    const pattern = patterns[(level - 1) % patterns.length];
-    const colShift = Math.max(0, Math.floor((brickColumnCount - pattern[0].length) / 2));
+    
+    // Адаптивная высота уровня
+    const maxRows = Math.floor((canvas.height * 0.4) / (brickHeight + brickPadding));
+    const rows = Math.min(maxRows, 6 + (level % 8)); 
+    const type = level % 5; 
 
     for (let c = 0; c < brickColumnCount; c++) {
         bricks[c] = [];
-        for (let r = 0; r < 12; r++) {
-            let isV = (r < pattern.length && c >= colShift && c < colShift + pattern[0].length) ? pattern[r][c - colShift] === 1 : false;
+        for (let r = 0; r < rows; r++) {
+            let isV = false;
+            if (type === 0) isV = (c + r) % 2 === 0; 
+            else if (type === 1) isV = r % 2 === 0; 
+            else if (type === 2) isV = (c % 2 === 0 && r % 2 === 0) || (c % 2 !== 0 && r % 2 !== 0); 
+            else if (type === 3) isV = Math.sin(c * 0.5 + r * 0.5) > 0; 
+            else isV = Math.random() > 0.3; 
+
             if (isV) activeBricks++;
             bricks[c][r] = {
                 x: c * (brickWidth + brickPadding) + offLeft, y: r * (brickHeight + brickPadding) + brickOffsetTop,
-                status: isV ? 1 : 0, color: `hsl(${(r * 35 + level * 20) % 360}, 80%, 60%)`,
+                status: isV ? 1 : 0, color: `hsl(${(r * 35 + level * 20 + c * 10) % 360}, 80%, 60%)`,
                 powerUp: isV && Math.random() < 0.22 ? powerUpTypes[Math.floor(Math.random() * powerUpTypes.length)] : null
             };
         }
@@ -228,7 +238,7 @@ function spawnBall(x, y, dx, dy) {
 function predictLandingX(b) {
     let sX = b.x, sY = b.y, sDX = b.dx, sDY = b.dy;
     const pT = canvas.height - paddleHeight - paddleBottomMargin;
-    for (let i = 0; i < 600; i++) {
+    for (let i = 0; i < 400; i++) {
         sX += sDX; sY += sDY;
         if (sX < ballRadius) { sX = ballRadius; sDX = Math.abs(sDX); }
         else if (sX > canvas.width - ballRadius) { sX = canvas.width - ballRadius; sDX = -Math.abs(sDX); }
@@ -238,11 +248,12 @@ function predictLandingX(b) {
     return sX;
 }
 
-// --- 7. ОБНОВЛЕНИЕ ---
+// --- 9. ОБНОВЛЕНИЕ ---
 function update() {
     if (isGameOver) return;
     const pY = canvas.height - paddleHeight - paddleBottomMargin;
 
+    // ШАРЫ
     for (let i = balls.length - 1; i >= 0; i--) {
         let b = balls[i]; 
         if (isNaN(b.x) || isNaN(b.y)) { balls.splice(i, 1); continue; }
@@ -268,7 +279,7 @@ function update() {
                 } else if (b.y > canvas.height + 20) {
                     balls.splice(i, 1);
                     if (balls.length === 0) { endGame(false); return; }
-                    break; 
+                    break;
                 }
             }
 
@@ -293,6 +304,7 @@ function update() {
         }
     }
 
+    // БОНУСЫ
     for(let i=powerUps.length-1; i>=0; i--) {
         let p = powerUps[i]; 
         let prevY = p.y;
@@ -315,6 +327,7 @@ function update() {
         if (p.y > canvas.height) powerUps.splice(i, 1);
     }
 
+    // ФИЗИКА
     let physicsEntities = [];
     balls.forEach(b => physicsEntities.push({x: b.x, y: b.y, r: ballRadius, ref: b, type: 'ball'}));
     powerUps.forEach(p => physicsEntities.push({x: p.x, y: p.y, r: p.radius, ref: p, type: 'powerup'}));
@@ -336,6 +349,7 @@ function update() {
         }
     }
 
+    // АВТОПИЛОТ
     if (autoplay && balls.length && !isUserTouching) {
         let target = balls.reduce((p, c) => (c.dy > 0 && (!p || c.y > p.y) ? c : p), null);
         let tX = canvas.width / 2;
@@ -363,22 +377,17 @@ function update() {
 
     if (needsLevelUp) {
         needsLevelUp = false; level++;
+        changeFlightCourse(); 
         initBricks(); balls = []; spawnBall();
         playNaturalSound('powerup');
     }
 }
 
-// --- 8. ОТРИСОВКА ---
+// --- 10. ОТРИСОВКА ---
 function drawAll() {
     if (!ctx) return;
-    
-    // ОЧИСТКА + КОСМОС (С УЧЕТОМ ТРЯСКИ)
-    ctx.fillStyle = "#000"; 
-    ctx.fillRect(0, 0, canvas.width, canvas.height); 
-    
-    // Рисуем звезды
+    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, canvas.width, canvas.height);
     updateAndDrawStars();
-
     drawBallString("S", 25, 35, 12, "#fbbf24"); drawBallString(score, 55, 35, 16, "#fff");
     const lX = canvas.width - 110; drawBallString("L", lX, 35, 12, "#3b82f6"); drawBallString(level, lX + 28, 35, 16, "#fff");
 
@@ -395,9 +404,7 @@ function drawAll() {
     pG.addColorStop(0, "#3a8dff"); pG.addColorStop(1, "#0047ab");
     ctx.beginPath(); ctx.rect(paddleX, pY, paddleWidth, paddleHeight);
     ctx.fillStyle = pG; ctx.fill(); ctx.restore();
-    
     balls.forEach(b => { ctx.save(); ctx.shadowBlur = 10; ctx.shadowColor = "#fff"; ctx.beginPath(); ctx.arc(b.x, b.y, ballRadius, 0, 7); ctx.fillStyle = "#fff"; ctx.fill(); ctx.restore(); });
-    
     powerUps.forEach(p => {
         ctx.beginPath(); ctx.arc(p.x, p.y, 11, 0, 7);
         let color = p.type === 'extraBall' ? '#fbbf24' : p.type === 'widerPaddle' ? '#4caf50' : '#f43f5e';
@@ -405,7 +412,6 @@ function drawAll() {
         ctx.fillStyle = "#000"; ctx.font = "bold 12px Arial"; ctx.textAlign = "center";
         ctx.fillText(p.type === 'extraBall' ? 'B' : p.type === 'widerPaddle' ? 'W' : 'S', p.x, p.y + 4);
     });
-
     particles.forEach(p => { ctx.globalAlpha = p.life; ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, 3, 3); });
     floatingTexts.forEach(ft => { ctx.globalAlpha = ft.life; ctx.fillStyle = ft.color; ctx.font = `bold ${Math.floor(ft.size)}px Arial`; ctx.textAlign = "center"; ctx.fillText(ft.text, ft.x, ft.y); });
     ctx.globalAlpha = 1;
@@ -421,12 +427,46 @@ function gameLoop() {
     animationId = requestAnimationFrame(gameLoop);
 }
 
-// --- 9. ЗАПУСК И УПРАВЛЕНИЕ ---
+// --- 11. НАСТРОЙКИ И ЗАПУСК ---
+function loadSettings() {
+    const savedSound = localStorage.getItem('breakout_sound');
+    const savedAutoplay = localStorage.getItem('breakout_autoplay');
+    const savedGyro = localStorage.getItem('breakout_gyro');
+    const savedSens = localStorage.getItem('breakout_sensitivity');
+    const savedInvert = localStorage.getItem('breakout_gyro_invert');
+
+    if (savedSound !== null) isSoundOn = (savedSound === 'true');
+    if (savedAutoplay !== null) autoplay = (savedAutoplay === 'true');
+    if (savedGyro !== null) isGyroOn = (savedGyro === 'true');
+    if (savedSens !== null) gyroSensitivity = parseFloat(savedSens);
+    if (savedInvert !== null) isGyroInverted = (savedInvert === 'true');
+
+    if(document.getElementById('toggle-sound')) document.getElementById('toggle-sound').checked = isSoundOn;
+    if(document.getElementById('toggle-autoplay')) document.getElementById('toggle-autoplay').checked = autoplay;
+    if(document.getElementById('toggle-gyro')) document.getElementById('toggle-gyro').checked = isGyroOn;
+    if(document.getElementById('toggle-invert')) document.getElementById('toggle-invert').checked = isGyroInverted;
+    if(document.getElementById('gyro-slider')) document.getElementById('gyro-slider').value = gyroSensitivity;
+}
+
+function saveSettings() {
+    localStorage.setItem('breakout_sound', isSoundOn);
+    localStorage.setItem('breakout_autoplay', autoplay);
+    localStorage.setItem('breakout_gyro', isGyroOn);
+    localStorage.setItem('breakout_sensitivity', gyroSensitivity);
+    localStorage.setItem('breakout_gyro_invert', isGyroInverted);
+}
+
 function handleSecretToggle() {
     const now = Date.now();
     if (now - lastClickTime < 500) clickCounter++; else clickCounter = 1;
     lastClickTime = now;
-    if (clickCounter >= 3) { autoplay = !autoplay; clickCounter = 0; playNaturalSound('powerup'); }
+    if (clickCounter >= 3) { 
+        autoplay = !autoplay; 
+        clickCounter = 0; 
+        playNaturalSound('powerup');
+        if(document.getElementById('toggle-autoplay')) document.getElementById('toggle-autoplay').checked = autoplay;
+        saveSettings();
+    }
 }
 
 function endGame(win) {
@@ -434,10 +474,10 @@ function endGame(win) {
     if (animationId) { cancelAnimationFrame(animationId); animationId = null; }
     if(gameOverScreen) gameOverScreen.style.display = "block";
     if(statusText) statusText.textContent = win ? "ПОБЕДА!" : "КОНЕЦ ИГРЫ";
+    if(scoreText) scoreText.textContent = "Ваш счёт: " + score;
 }
 
 function startGame() {
-    requestWakeLock();
     initAudio(); 
     if (animationId) { cancelAnimationFrame(animationId); animationId = null; }
     gameStarted = true; isGameOver = false;
@@ -451,34 +491,65 @@ function startGame() {
 window.resetGame = () => { startGame(); };
 
 function handleOrientation(e) {
-    if (!gameStarted || isGameOver || autoplay) return;
+    if (!gameStarted || isGameOver || autoplay || !isGyroOn) return;
+    if (isUserTouching) return;
+
     let tilt = (window.orientation === 90 || window.orientation === -90) ? e.beta : e.gamma;
-    if (tilt !== null && Math.abs(tilt) > 1.5) { paddleX += tilt * 1.3; keepPaddleInBounds(); }
+    let direction = isGyroInverted ? 1 : -1;
+    
+    if (tilt !== null && Math.abs(tilt) > 1.5) { 
+        paddleX += tilt * direction * gyroSensitivity; 
+        keepPaddleInBounds(); 
+    }
 }
 
 document.addEventListener("DOMContentLoaded", () => {
     canvas = document.getElementById("gameCanvas"); ctx = canvas.getContext("2d");
-    gameOverScreen = document.getElementById("game-over"); statusText = document.getElementById("status-text");
+    gameOverScreen = document.getElementById("game-over"); 
+    statusText = document.getElementById("status-text");
+    scoreText = document.getElementById("score-text");
     startPrompt = document.getElementById("start-prompt"); startBtn = document.getElementById("start-btn");
     
+    loadSettings();
+
+    const settingsBtn = document.getElementById('settings-btn-icon');
+    const settingsModal = document.getElementById('settings-modal');
+    const closeSettingsBtn = document.getElementById('close-settings');
+
+    if(settingsBtn) settingsBtn.onclick = () => { settingsModal.style.display = 'block'; };
+    if(closeSettingsBtn) closeSettingsBtn.onclick = () => { settingsModal.style.display = 'none'; };
+
+    if(document.getElementById('toggle-sound')) document.getElementById('toggle-sound').onchange = (e) => { isSoundOn = e.target.checked; saveSettings(); };
+    if(document.getElementById('toggle-autoplay')) document.getElementById('toggle-autoplay').onchange = (e) => { autoplay = e.target.checked; saveSettings(); };
+    if(document.getElementById('toggle-gyro')) document.getElementById('toggle-gyro').onchange = (e) => { isGyroOn = e.target.checked; saveSettings(); };
+    if(document.getElementById('toggle-invert')) document.getElementById('toggle-invert').onchange = (e) => { isGyroInverted = e.target.checked; saveSettings(); };
+    if(document.getElementById('gyro-slider')) document.getElementById('gyro-slider').oninput = (e) => { gyroSensitivity = parseFloat(e.target.value); saveSettings(); };
+
+    const unlock = () => { initAudio(); };
+    window.addEventListener('touchstart', unlock, {once:true});
+    window.addEventListener('click', unlock, {once:true});
+
     startBtn.onclick = () => {
         initAudio();
-        requestWakeLock(); // Дублируем вызов для надежности
-        if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        requestWakeLock();
+        if (isGyroOn && typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
             DeviceOrientationEvent.requestPermission().then(state => {
                 if (state === 'granted') window.addEventListener('deviceorientation', handleOrientation);
                 startGame();
             }).catch(() => startGame());
         } else {
-            window.addEventListener('deviceorientation', handleOrientation);
+            if (isGyroOn) window.addEventListener('deviceorientation', handleOrientation);
             startGame();
         }
     };
 
     canvas.addEventListener("pointerdown", e => { 
-        requestWakeLock(); // Поддерживаем активность экрана
-        if (e.clientY < 100) handleSecretToggle();
-        else isUserTouching = true;
+        if (e.clientY < 100) {
+            const now = Date.now();
+            if (now - lastClickTime < 500) clickCounter++; else clickCounter = 1;
+            lastClickTime = now;
+            if (clickCounter >= 3) { handleSecretToggle(); clickCounter = 0; }
+        } else isUserTouching = true;
     });
     canvas.addEventListener("pointerup", () => isUserTouching = false);
     
