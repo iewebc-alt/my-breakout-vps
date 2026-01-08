@@ -1,6 +1,6 @@
 #!/bin/bash
 # Скрипт для сбора контекста проекта для ИИ
-echo "=== VPS PROJECT SNAPSHOT ==="
+echo "=== VPS DEV PROJECT SNAPSHOT ==="
 echo "Path: $(pwd)"
 echo "Date: $(date)"
 echo ""
