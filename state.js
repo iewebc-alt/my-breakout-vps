@@ -1,4 +1,4 @@
-// state.js — Единственный источник истины
+// state.js
 export const state = {
     score: 0,
     level: 1,
@@ -21,13 +21,13 @@ export const state = {
     powerUps: [],
     floatingTexts: [],
 
-    // Адаптивность кирпичей
+    // Адаптивные размеры кирпичей
     currentBrickWidth: 60,
     currentBrickPadding: 8,
     brickHeight: 25,
     brickOffsetTop: 110,
 
-    // Окружение и Hyperdrive
+    // Окружение
     stars: [],
     starSpeed: 2,
     starAngle: 0,
@@ -35,26 +35,24 @@ export const state = {
     flightDirY: 0,
     rotationSpeed: 0,
     gridOffset: 0,
-    
-    // ИСТОРИЯ ДЛЯ АНТИ-СТИКА (Обязательная инициализация Map)
-    ballPosHistory: new Map(), 
 
+    // Настройки
     settings: {
         sound: true,
         auto: false,
         starDensity: 50,
-        bgMode: 'warp',
+        bgMode: 'grid',
         sens: 0.4,
         rank: 0,
-        spinStrength: 0.15
+        spinStrength: 0.15 // Сила кручения по умолчанию
     },
 
     wakeLock: null,
     canvas: null,
     ctx: null,
-    startPrompt: null,
     gameOverScreen: null,
     statusText: null,
     scoreText: null,
+    startPrompt: null,
     startBtn: null
 };

@@ -1,29 +1,22 @@
 #!/bin/bash
 
-# r.sh — Интерактивное восстановление (Авто-именование)
+# r.sh — Интерактивное восстановление
 # Путь: /var/www/breakout_dev
 
-PROJECT_PATH=$(pwd)
-PROJECT_NAME=$(basename "$PROJECT_PATH")
-BACKUP_DIR="/var/www/backups/$PROJECT_NAME"
+PROJECT_DIR="/var/www/breakout_dev"
+BACKUP_DIR="$PROJECT_DIR/ARX"
 
-if [ ! -d "$BACKUP_DIR" ]; then 
-    echo "❌ Бэкапов для проекта '$PROJECT_NAME' не найдено в $BACKUP_DIR"
-    exit 1
-fi
+cd "$BACKUP_DIR" || { echo "❌ Папка ARX не найдена"; exit 1; }
 
-cd "$BACKUP_DIR" || exit
-
-# 1. Вывод списка
-echo "📂 Точки восстановления для $PROJECT_NAME:"
+# 1. Вывод списка доступных архивов
+echo "📂 Доступные точки восстановления:"
 echo "-------------------------------------------------------"
 i=1
+# Собираем список архивов в массив
 files=(bk_*.tar.gz)
 
-# Проверка на наличие файлов
-if [ ! -e "${files[0]}" ]; then echo "Архивов нет"; exit 1; fi
-
 for file in "${files[@]}"; do
+    # Читаем соответствующий .txt файл с комментарием
     comment_file="${file%.tar.gz}.txt"
     comment=$(cat "$comment_file" 2>/dev/null || echo "Нет описания")
     echo "[$i] $file — $comment"
@@ -31,30 +24,51 @@ for file in "${files[@]}"; do
 done
 echo "-------------------------------------------------------"
 
-echo "🔢 Номер архива (или 'q'):"
+# 2. Выбор архива
+echo "🔢 Введите номер архива для восстановления (или 'q' для выхода):"
 read choice
+
 if [[ "$choice" == "q" ]]; then exit; fi
 
 selected_file="${files[$((choice-1))]}"
-if [ -z "$selected_file" ]; then echo "❌ Ошибка выбора"; exit 1; fi
 
-# 2. Выбор области (согласно Манифесту v2.3)
-echo -e "\n🛠️ Что восстановить?"
+if [ -z "$selected_file" ]; then
+    echo "❌ Неверный номер"
+    exit 1
+fi
+
+# 3. Выбор области восстановления (на основе реестра)
+echo -e "\n🛠️ Что восстановить из архива?"
 echo "[1] Весь проект (Full Restore)"
-echo "[2] Логика (physics, state, config)"
-echo "[3] Визуал (renderer, index.html)"
-echo "[4] Ввод (input.js)"
+echo "[2] Только логику (physics.js, state.js, config.js)"
+echo "[3] Только визуал (renderer.js, index.html)"
+echo "[4] Только управление (input.js)"
 read type_choice
 
-cd "$PROJECT_PATH" || exit
+cd "$PROJECT_DIR" || exit
 
 case $type_choice in
-    1) tar -xzf "$BACKUP_DIR/$selected_file" ;;
-    2) tar -xzf "$BACKUP_DIR/$selected_file" physics.js state.js config.js ;;
-    3) tar -xzf "$BACKUP_DIR/$selected_file" renderer.js index.html ;;
-    4) tar -xzf "$BACKUP_DIR/$selected_file" input.js ;;
-    *) echo "Отмена"; exit 1 ;;
+    1)
+        echo "🚀 Восстановление всего проекта..."
+        tar -xzf "$BACKUP_DIR/$selected_file"
+        ;;
+    2)
+        echo "🧠 Восстановление логического ядра..."
+        tar -xzf "$BACKUP_DIR/$selected_file" physics.js state.js config.js
+        ;;
+    3)
+        echo "🎨 Восстановление визуальной части..."
+        tar -xzf "$BACKUP_DIR/$selected_file" renderer.js index.html
+        ;;
+    4)
+        echo "🕹️ Восстановление системы ввода..."
+        tar -xzf "$BACKUP_DIR/$selected_file" input.js
+        ;;
+    *)
+        echo "❌ Отмена"
+        exit 1
+        ;;
 esac
 
-echo "✅ Восстановление '$PROJECT_NAME' завершено!"
-echo "🔄 Запустите ./u.sh для обновления Docker."
+echo "✅ Восстановление завершено!"
+echo "🔄 Не забудьте запустить ./update_dev.sh для обновления Docker-контейнера."

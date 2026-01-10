@@ -1,4 +1,4 @@
-// storage.js — Работа с LocalStorage
+// storage.js
 import { state } from './state.js';
 
 const STORAGE_KEY = 'breakout_v11_final';
@@ -10,36 +10,25 @@ export function saveSettings() {
 export function loadSettings() {
     try {
         const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-        if (saved) {
-            // Мержим сохраненные настройки в текущий state
-            Object.assign(state.settings, saved);
-        }
-        
-        // Синхронизация UI элементов с загруженными данными
+        if (saved) Object.assign(state.settings, saved);
+
         setTimeout(() => {
-            const uiMap = {
-                'select-rank': 'value',
-                'toggle-sound': 'checked',
-                'toggle-autoplay': 'checked',
-                'toggle-stars': 'checked',
-                'toggle-invert': 'checked',
-                'gyro-slider': 'value'
-            };
-
-            for (const [id, prop] of Object.entries(uiMap)) {
-                const el = document.getElementById(id);
-                if (el) {
-                    el[prop] = state.settings[id.replace('toggle-', '').replace('select-', '').replace('gyro-slider', 'sens')];
-                    // Специальный фикс для ранга и сенсы, так как ключи в state короче
-                    if (id === 'select-rank') el.value = state.settings.rank;
-                    if (id === 'gyro-slider') el.value = state.settings.sens;
-                }
-            }
-
-            const gyroValueDisplay = document.getElementById('gyro-value');
-            if (gyroValueDisplay) gyroValueDisplay.textContent = state.settings.sens;
-        }, 100);
-    } catch(e) {
-        console.warn("Could not load settings:", e);
-    }
+            const s = state.settings;
+            const map = [
+                { id: 'select-rank', val: s.rank, p: 'value' },
+                { id: 'toggle-sound', val: s.sound, p: 'checked' },
+                { id: 'toggle-autoplay', val: s.auto, p: 'checked' },
+                { id: 'stars-slider', val: s.starDensity, p: 'value' },
+                { id: 'gyro-slider', val: s.sens, p: 'value' },
+                { id: 'spin-slider', val: s.spinStrength, p: 'value' }
+            ];
+            map.forEach(i => {
+                const el = document.getElementById(i.id);
+                if (el) el[i.p] = i.val;
+            });
+            if (document.getElementById('stars-value')) document.getElementById('stars-value').textContent = s.starDensity;
+            if (document.getElementById('gyro-value')) document.getElementById('gyro-value').textContent = s.sens;
+            if (document.getElementById('spin-value')) document.getElementById('spin-value').textContent = s.spinStrength;
+        }, 150);
+    } catch(e) {}
 }

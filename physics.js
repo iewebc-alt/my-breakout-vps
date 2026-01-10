@@ -1,4 +1,4 @@
-// physics.js — Ядро 2.3 (Stable & Smart AI)
+// physics.js — Ядро 2.1 (Stability Fix)
 import { state } from './state.js';
 import { config } from './config.js';
 import { playNaturalSound } from './audio.js';
@@ -9,26 +9,21 @@ export function updatePaddleSize() {
 }
 
 export function keepPaddleInBounds() {
-    const maxX = state.canvas.width - state.paddleWidth;
     if (state.paddleX < 0) state.paddleX = 0;
-    if (state.paddleX > maxX) state.paddleX = maxX;
+    if (state.paddleX > state.canvas.width - state.paddleWidth) state.paddleX = state.canvas.width - state.paddleWidth;
 }
 
 export function initBricks() {
-    if (!config.levelPatterns || config.levelPatterns.length === 0) {
-        console.error("CRITICAL: config.levelPatterns is missing!");
-        state.bricks = [];
-        return;
-    }
-
     state.bricks = [];
-    const patternIndex = (state.level - 1) % config.levelPatterns.length;
-    const pattern = config.levelPatterns[patternIndex];
-    const rows = pattern.data.length, cols = pattern.data[0].length;
-
-    const availableWidth = state.canvas.width - 40;
-    state.currentBrickWidth = (availableWidth - (config.brickPadding * (cols - 1))) / cols;
-    const totalW = cols * (state.currentBrickWidth + config.brickPadding) - config.brickPadding;
+    const pattern = config.levelPatterns[(state.level - 1) % config.levelPatterns.length];
+    const rows = pattern.data.length;
+    const cols = pattern.data[0].length;
+    const sideMargin = 20;
+    const availableWidth = state.canvas.width - (sideMargin * 2);
+    const totalPadding = config.brickPadding * (cols - 1);
+    state.currentBrickWidth = (availableWidth - totalPadding) / cols;
+    state.currentBrickPadding = config.brickPadding;
+    const totalW = cols * (state.currentBrickWidth + state.currentBrickPadding) - state.currentBrickPadding;
     const offLeft = (state.canvas.width - totalW) / 2;
 
     for (let r = 0; r < rows; r++) {
@@ -36,8 +31,8 @@ export function initBricks() {
             if (pattern.data[r][c] === 1) {
                 if (!state.bricks[c]) state.bricks[c] = [];
                 state.bricks[c][r] = {
-                    x: c * (state.currentBrickWidth + config.brickPadding) + offLeft,
-                    y: r * (state.brickHeight + config.brickPadding) + state.brickOffsetTop,
+                    x: c * (state.currentBrickWidth + state.currentBrickPadding) + offLeft,
+                    y: r * (state.brickHeight + state.currentBrickPadding) + state.brickOffsetTop,
                     status: 1,
                     color: `hsl(${(r * 40 + state.level * 30) % 360}, 70%, 60%)`,
                     powerUp: Math.random() < 0.18 ? config.powerUpTypes[Math.floor(Math.random() * 3)] : null
@@ -48,10 +43,13 @@ export function initBricks() {
 }
 
 export function spawnBall(x, y, dx, dy) {
+    if (state.balls.length > 15) return;
     const speed = (1 + (state.level - 1) * 0.1) * [1, 1.2, 1.5][state.settings.rank];
     state.balls.push({
-        id: Math.random(), x: x || state.canvas.width / 2, y: y || state.canvas.height - 150,
-        dx: dx || (Math.random() - 0.5) * 8 * speed, dy: dy || -6 * speed,
+        x: x || state.canvas.width / 2,
+        y: y || state.canvas.height - 150,
+        dx: dx || (Math.random() - 0.5) * 8 * speed,
+        dy: dy || -6 * speed,
         spin: 0, pX: null
     });
 }
@@ -90,7 +88,8 @@ function resolveElasticCollision(a, b, rA, rB) {
             const finalImpulse = impulse * 1.2;
             a.dx -= finalImpulse * nx; a.dy -= finalImpulse * ny;
             if (b.dx !== undefined) { b.dx += finalImpulse * nx; b.dy += finalImpulse * ny; }
-            playNaturalSound('wall'); recalculateTargets();
+            playNaturalSound('wall');
+            recalculateTargets();
         }
     }
 }
@@ -99,40 +98,32 @@ export function update() {
     if (state.isGameOver || !state.gameStarted) return;
     const pY = state.canvas.height - state.paddleHeight - state.paddleBottomMargin;
 
-    if (state.balls.length > 0) {
-        const slowest = state.balls.reduce((min, b) => {
-            const s = Math.sqrt(b.dx**2 + b.dy**2); return s < min ? s : min;
-        }, 10);
-        state.starSpeed = slowest * 0.8;
-    }
-
     if (state.paddleBonusTime > 0) {
         state.paddleBonusTime -= 16.6;
         if (state.paddleBonusTime <= 0) updatePaddleSize();
     }
-    state.paddleWidth += (state.targetPaddleWidth - state.paddleWidth) * 0.1;
 
-    const bodies = [...state.balls.map(b=>({o:b, r:config.ballRadius})), ...state.powerUps.map(p=>({o:p, r:p.radius}))];
-    for(let i=0; i<bodies.length; i++) {
-        for(let j=i+1; j<bodies.length; j++) {
+    if (Math.abs(state.paddleWidth - state.targetPaddleWidth) > 0.5) {
+        const oldW = state.paddleWidth;
+        state.paddleWidth += (state.targetPaddleWidth - state.paddleWidth) * 0.1;
+        state.paddleX -= (state.paddleWidth - oldW) / 2;
+    }
+
+    // 1. Столкновения объектов (Fix: bodies instead of all)
+    const bodies = [
+        ...state.balls.map(b => ({ o: b, r: config.ballRadius })),
+        ...state.powerUps.map(p => ({ o: p, r: p.radius }))
+    ];
+    for (let i = 0; i < bodies.length; i++) {
+        for (let j = i + 1; j < bodies.length; j++) {
             resolveElasticCollision(bodies[i].o, bodies[j].o, bodies[i].r, bodies[j].r);
         }
     }
 
+    // 2. Мячи
     state.balls.forEach((b, idx) => {
-        b.x += b.dx; b.y += b.dy; b.dx += b.spin; b.spin *= 0.98;
-
-        // Анти-стик (Manifesto v2.3) с защитой от undefined Map
-        if (state.settings.auto && state.ballPosHistory) {
-            let history = state.ballPosHistory.get(b.id) || []; 
-            history.push(b.x);
-            if (history.length > 3) history.shift();
-            if (history.length === 3 && history.every(v => Math.abs(v - history[0]) < 0.1)) {
-                if (b.x < 50 || b.x > state.canvas.width - 50) { b.dx += (b.x < 50 ? 2 : -2); recalculateTargets(); }
-            }
-            state.ballPosHistory.set(b.id, history);
-        }
-
+        b.dx += b.spin; b.spin *= 0.98;
+        b.x += b.dx; b.y += b.dy;
         if (b.x < config.ballRadius) { b.x = config.ballRadius; b.dx = Math.abs(b.dx) + 0.1; playNaturalSound('wall'); recalculateTargets(); }
         if (b.x > state.canvas.width - config.ballRadius) { b.x = state.canvas.width - config.ballRadius; b.dx = -Math.abs(b.dx) - 0.1; playNaturalSound('wall'); recalculateTargets(); }
         if (b.y < config.ballRadius) { b.y = config.ballRadius; b.dy = Math.abs(b.dy); playNaturalSound('wall'); recalculateTargets(); }
@@ -149,49 +140,52 @@ export function update() {
 
         state.bricks.forEach(col => col.forEach(br => {
             if (br && br.status) {
-                const cX = Math.max(br.x, Math.min(b.x, br.x + state.currentBrickWidth));
-                const cY = Math.max(br.y, Math.min(b.y, br.y + state.brickHeight));
-                if (Math.sqrt((b.x - cX)**2 + (b.y - cY)**2) < config.ballRadius) {
-                    if (Math.abs(b.x - cX) < Math.abs(b.y - cY)) b.dy *= -1; else b.dx *= -1;
-                    br.status = 0; state.score += 10; playNaturalSound('brick'); 
-                    recalculateTargets(); 
+                const closestX = Math.max(br.x, Math.min(b.x, br.x + state.currentBrickWidth));
+                const closestY = Math.max(br.y, Math.min(b.y, br.y + state.brickHeight));
+                const dist = Math.sqrt((b.x - closestX)**2 + (b.y - closestY)**2);
+                if (dist < config.ballRadius) {
+                    const overlapX = config.ballRadius - Math.abs(b.x - closestX);
+                    const overlapY = config.ballRadius - Math.abs(b.y - closestY);
+                    if (overlapX < overlapY) b.dx *= -1; else b.dy *= -1;
+                    br.status = 0; state.score += 10 * (state.settings.rank + 1);
+                    playNaturalSound('brick'); recalculateTargets();
                     if (br.powerUp) state.powerUps.push({ x: br.x + state.currentBrickWidth/2, y: br.y, dy: 3, dx: (Math.random()-0.5)*4, radius: 11, type: br.powerUp });
                 }
             }
         }));
     });
 
+    // 3. Бонусы
     state.powerUps.forEach((p, idx) => {
         p.x += (p.dx || 0); p.y += p.dy;
-        if (p.x < p.radius || p.x > state.canvas.width - p.radius) { p.dx *= -1; playNaturalSound('wall'); }
-        if (p.y < p.radius) { p.y = p.radius; p.dy *= -1; playNaturalSound('wall'); }
-        
+        if (p.x < p.radius) { p.x = p.radius; p.dx = Math.abs(p.dx || 0); playNaturalSound('wall'); }
+        if (p.x > state.canvas.width - p.radius) { p.x = state.canvas.width - p.radius; p.dx = -Math.abs(p.dx || 0); playNaturalSound('wall'); }
+        if (p.y < p.radius) { p.y = p.radius; p.dy = Math.abs(p.dy); playNaturalSound('wall'); }
+
         state.bricks.forEach(col => col.forEach(br => {
-            if (br && br.status) {
-                if (p.x + p.radius > br.x && p.x - p.radius < br.x + state.currentBrickWidth && p.y + p.radius > br.y && p.y - p.radius < br.y + state.brickHeight) {
-                    p.dy *= -1; playNaturalSound('wall');
-                }
+            if (br && br.status && p.x + p.radius > br.x && p.x - p.radius < br.x + state.currentBrickWidth && p.y + p.radius > br.y && p.y - p.radius < br.y + state.brickHeight) {
+                p.dy *= -1; p.dx = (Math.random() - 0.5) * 4; playNaturalSound('wall');
             }
         }));
-        if (p.y + p.radius > pY && p.x > state.paddleX && p.x < state.paddleX + state.paddleWidth) {
-            state.score += 10;
+
+        if (p.y + p.radius > pY && p.y - p.radius < pY + state.paddleHeight && p.x > state.paddleX - 5 && p.x < state.paddleX + state.paddleWidth + 5) {
+            state.score += 10 * (state.settings.rank + 1);
             if (p.type === 'extraBall') spawnBall();
-            if (p.type === 'widerPaddle') { state.targetPaddleWidth = state.canvas.width * 0.45; state.paddleBonusTime += 10000; }
+            if (p.type === 'widerPaddle') { state.targetPaddleWidth = state.canvas.width * 0.45; state.paddleBonusTime = 10000; }
             state.powerUps.splice(idx, 1); playNaturalSound('powerup');
-            recalculateTargets();
         }
         if (p.y > state.canvas.height + 50) state.powerUps.splice(idx, 1);
     });
 
-    if (state.settings.auto && !state.isUserTouching && state.balls.length) {
-        const targetBall = state.balls.reduce((prev, curr) => (curr.y > prev.y ? curr : prev));
-        if (!targetBall.pX) targetBall.pX = predictLandingX(targetBall);
-        let diff = targetBall.pX - (state.paddleX + state.paddleWidth / 2);
-        if (Math.abs(diff) > 1) {
+    // 4. Автопилот (Приоритет: Touch > AI)
+    if (state.settings.auto && !state.isUserTouching) {
+        let targets = [...state.balls.filter(b => b.dy > 0), ...state.powerUps];
+        const target = targets.reduce((p, c) => (!p || c.y > p.y) ? c : p, null);
+        if (target) {
+            let tX = target.pX || target.x;
+            let diff = tX - (state.paddleX + state.paddleWidth / 2);
             state.paddleX += Math.sign(diff) * Math.min(Math.abs(diff), config.maxAutoplaySpeed);
             state.paddleVelocity = Math.sign(diff) * 10;
-        } else {
-            state.paddleVelocity = 0;
         }
     }
     keepPaddleInBounds();
